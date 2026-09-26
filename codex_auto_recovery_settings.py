@@ -13,12 +13,13 @@ from typing import Any
 
 
 CREDENTIAL_TARGET = "CodexAutoRecovery/Sub2API"
+DEFAULT_BASE_URL = "https://api.edom37.online"
 
 
 class AppSettings:
     def __init__(
         self,
-        base_url: str = "",
+        base_url: str = DEFAULT_BASE_URL,
         selected_tasks: list[str] | None = None,
         stale_seconds: int = 120,
         initial_delay: float = 60.0,

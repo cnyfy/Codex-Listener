@@ -29,12 +29,22 @@ from codex_auto_recovery import (  # noqa: E402
 )
 from codex_auto_recovery_settings import (  # noqa: E402
     AppSettings,
+    DEFAULT_BASE_URL,
     default_credential_backend,
     default_settings_path,
     load_settings,
     redact_secret,
     save_settings,
 )
+
+
+def missing_configuration(settings: AppSettings, api_key: str | None) -> list[str]:
+    missing: list[str] = []
+    if not settings.base_url.strip():
+        missing.append("中转站地址")
+    if not api_key or not api_key.strip():
+        missing.append("API Key")
+    return missing
 
 
 def filter_selected_summaries(
@@ -152,17 +162,20 @@ if TEXTUAL_AVAILABLE:
             ("pagedown", "page_settings_down", "下翻页"),
         ]
 
-        def __init__(self, settings: AppSettings, has_key: bool) -> None:
+        def __init__(self, settings: AppSettings, has_key: bool, required_fields: list[str] | None = None) -> None:
             super().__init__()
             self.settings = settings
             self.has_key = has_key
+            self.required_fields = required_fields or []
 
         def compose(self) -> ComposeResult:
             with Container(id="settings"):
+                if self.required_fields:
+                    yield Label("首次启动需要补充：" + "、".join(self.required_fields))
                 yield Label("自动恢复设置（常用项在前，保存后立即生效）")
                 with VerticalScroll(id="settings-body"):
                     yield Label("中转站地址（例如 https://example.com）")
-                    yield Input(value=self.settings.base_url, id="base_url", classes="field")
+                    yield Input(value=self.settings.base_url, placeholder=DEFAULT_BASE_URL, id="base_url", classes="field")
                     yield Label("API Key（留空表示不修改；只保存到 Windows 凭据管理器）")
                     yield Input(placeholder="已保存" if self.has_key else "尚未设置", password=True, id="api_key", classes="field")
                     yield Label("任务报错后，多久开始检查渠道（秒）")
@@ -291,6 +304,37 @@ if TEXTUAL_AVAILABLE:
             self.set_interval(max(0.5, self.settings.loop_interval), self.refresh_data)
             self.refresh_data()
             self.write_log("TUI 已启动，默认 dry-run；空选择表示监测全部符合条件的任务。")
+            missing = missing_configuration(self.settings, self.credential_backend.read())
+            if missing:
+                self.write_log("配置不完整，已打开设置界面：" + "、".join(missing))
+                self.push_screen(
+                    SettingsScreen(self.settings, bool(self.credential_backend.read()), missing),
+                    self._finish_initial_settings,
+                )
+
+        def _finish_initial_settings(self, updated: AppSettings | None) -> None:
+            if updated is None:
+                self.write_log("尚未完成必要配置；请按 S 打开设置。")
+                return
+            entered_key = getattr(updated, "pending_api_key", "")
+            if entered_key:
+                self.credential_backend.write(entered_key)
+            self.settings = updated
+            self.settings.selected_tasks = sorted(self.selected_tasks)
+            save_settings(self.settings_path, self.settings)
+            self.recovery_namespace = build_recovery_namespace(
+                self.settings,
+                Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+            )
+            remaining = missing_configuration(self.settings, self.credential_backend.read())
+            if remaining:
+                self.write_log("仍缺少：" + "、".join(remaining))
+                self.push_screen(
+                    SettingsScreen(self.settings, bool(self.credential_backend.read()), remaining),
+                    self._finish_initial_settings,
+                )
+            else:
+                self.write_log("必要配置已保存。")
 
         def write_log(self, message: str) -> None:
             self.query_one("#log", Log).write_line(message)
